@@ -70,7 +70,7 @@
  */
 #include <uStepperSLite.h>
 #include <math.h>
-
+#define VELOCITYINCREASESTEPS 2.0f	//Increase velocity by 3.75RPM/tick (3750 RPM/s)
 uStepperSLite *pointer;
 volatile int32_t *p __attribute__((used));
 
@@ -78,6 +78,32 @@ volatile int32_t *p __attribute__((used));
 i2cMaster I2C(1);
 
 extern "C" {
+
+	void TIMER4_COMPA_vect(void)
+	{
+		if(pointer->targetVelocity != pointer->currentVelocity)
+		{
+			if(pointer->targetVelocity > pointer->currentVelocity)
+			{	
+				pointer->currentVelocity += VELOCITYINCREASESTEPS;
+				if(pointer->currentVelocity > pointer->targetVelocity)
+				{	
+					pointer->currentVelocity = pointer->targetVelocity;
+				}
+			}
+			else if(pointer->targetVelocity < pointer->currentVelocity)
+			{	
+				pointer->currentVelocity -= VELOCITYINCREASESTEPS;
+				if(pointer->currentVelocity < pointer->targetVelocity)
+				{	
+					pointer->currentVelocity = pointer->targetVelocity;
+				}
+			}
+			cli();
+			pointer->driver.setVelocity(pointer->currentVelocity);
+		}
+		sei();
+	}
 
 	void interrupt1(void)
 	{
@@ -1234,9 +1260,22 @@ void uStepperSLite::setup(	uint8_t mode,
 		this->hysteresis = faultHysteresis;
 		
 		//Scale supplied controller coefficents. This is done to enable the user to use easier to manage numbers for these coefficients.
-	    this->pTerm = pTerm/10000.0;    
-	    this->iTerm = iTerm/(10000.0*500.0);
-	    this->dTerm = dTerm/(10000.0/500.0);
+	    this->pTerm = pTerm;    
+	    this->iTerm = iTerm/(1.0*500.0);
+	    this->dTerm = dTerm/(1.0/500.0);
+		
+		TCCR4B = 0;
+		TCCR4A = 0;
+
+		TCCR4A |= (1 << WGM41);				//Switch timer 2 to Fast PWM mode, to enable adjustment of interrupt frequency, while being able to use PWM
+		ICR4 = 2000;
+
+		TCCR4B |= (1 << CS41) | (1 << WGM42) | (1 << WGM43);				//Enable timer with prescaler 8 - interrupt base frequency ~ 2MHz
+		while(TCNT4);						//Wait for timer to overflow, to ensure correct timing.
+		TIMSK4 |= (1 << OCIE4A);			//Enable compare match interrupt
+
+		this->currentVelocity = 0;
+		this->targetVelocity = 0;
 	}
 
 	this->stepConversion = ((float)(200*microStepping))/4096.0;	//Calculate conversion coefficient from raw encoder data, to actual moved steps
@@ -1247,7 +1286,7 @@ void uStepperSLite::setup(	uint8_t mode,
 	TCCR2A |= (1 << WGM21) | (1 << WGM20);				//Switch timer 2 to Fast PWM mode, to enable adjustment of interrupt frequency, while being able to use PWM
 	OCR2A = 70;											//Change top value to 70 in order to obtain an interrupt frequency of 28.571kHz
 	OCR2B = 70;
-	
+
 	this->driver.setup();
 	/*this->enableMotor();
 	this->moveSteps(10,CW,SOFT);
@@ -1470,6 +1509,9 @@ void uStepperSLite::moveToAngle(float angle, bool holdMode)
 	float diff;
 	uint32_t steps;
 
+		this->angleSetPoint = angle;
+		return;
+
 		diff = angle - this->encoder.getAngleMoved();
 		steps = (uint32_t)((abs(diff)*angleToStep) + 0.5);
 		
@@ -1662,34 +1704,20 @@ void uStepperSLite::pid(void)
 	static uint8_t stallCounter = 0;
 	static bool running = 0;
 
-	sei();
 	if(I2C.getStatus() != I2CFREE)
 	{
 		return;
 	}
-	TIMSK1 &= ~(1 << OCIE1A);
-	I2C.read(ENCODERADDR, ANGLE, 2, data);
-	TIMSK1 |= (1 << OCIE1A);
-	cli();
-		error = (float)this->stepsSinceReset;
-		if(this->exactDelay.getFloatValue() >= 1.0)
-		{
-			speed = (uint32_t)((this->exactDelay.getFloatValue() * INTPERIOD));
-		}
-		else
-		{
-			speed = 10000;
-		}
 
-		if(speed > 10000)
-		{
-			speed = 10000;
-		}
-	sei();
+	I2C.read(ENCODERADDR, ANGLE, 2, data);
+		
+	error = this->angleSetPoint;
 	
 	curAngle = (((uint16_t)data[0]) << 8 ) | (uint16_t)data[1];
+
 	this->encoder.angle = curAngle;
 	curAngle -= this->encoder.encoderOffset;
+	
 	if(curAngle > 4095)
 	{
 		curAngle -= 61440;
@@ -1713,7 +1741,7 @@ void uStepperSLite::pid(void)
 	this->encoder.oldAngle = curAngle;
 
 	error = (((float)this->encoder.angleMoved * this->stepConversion) - error); 
-	
+	/*
 	if(!this->control)
 	{
 		if(this->state != STOP)
@@ -1727,126 +1755,27 @@ void uStepperSLite::pid(void)
 	}
 
 	detectStall((float)deltaAngle, running);
+*/
 
-	if(error < -this->tolerance)
+	integral = error*this->iTerm;	//Multiply current error by integral term
+	accumError += integral;				//And accumulate, to get integral action	
+	output = this->pTerm*error;
+	output += this->dTerm*oldError;
+	output += accumError;
+	if(output > 100.0)
 	{
-		cli(); //Do Atomic copy, in order to not fuck up variables
-			this->control = (int32_t)error;	//Move current error into control variable, for Timer2 and int0 routines to decide who should provide steps
-		sei();
-
-		error = -error;		//error variable should always be positive when calculating controller output
-	
-		integral = error*this->iTerm;	//Multiply current error by integral term
-		accumError += integral;				//And accumulate, to get integral action
-		
-		//The output of each PID part, should be subtracted from the output variable.
-		//This is true, since in case of no error the motor should run at a higher speed
-		//to catch up, and since the speed variable contains the number of microseconds
-		//between each step, the we need to multiply with a number < 1 to increase speed
-		output -= this->pTerm*error;		
-		output -= accumError;
-		oldError = error - oldError;
-		output -= this->dTerm*oldError;
-
-		oldError = error;		//Save current error for next sample, for use in differential part
-
-		PORTB &= ~(1 << 2);		//change direction to CW
-		
-		output *= (float)speed;
-
-	    if(output < 54.0)
-	    {
-	    	accumError -= integral;
-	    	output = 54.0;
-	    }
-	    
-	    cli();
-	      this->delay = (uint16_t)((output*INTPIDDELAYCONSTANT) - 0.5);
-	    if(!running)
-	    {
-	    	this->state = CRUISE;
-	    }
-	    sei();
-
-		this->startTimer();	
-		PORTD &= ~(1 << 4);
+		output = 100.0;
+		accumError -= integral;
+	}
+	else if(output < -100.0)
+	{
+		output = -100.0;
+		accumError -= integral;
 	}
 
-	else if(error > this->tolerance)
-	{
-		cli(); //Do Atomic copy, in order to not fuck up variables
-			this->control = (int32_t)error;		
-		sei();
+	this->targetVelocity = output;
 
-		integral = error*this->iTerm;
-		accumError += integral;
-
-		output -= this->pTerm*error;
-		output -= accumError;
-		oldError = error - oldError;
-		output -= this->dTerm*(error - oldError);
-
-		oldError = error;
-		
-		PORTB |= (1 << 2);				//change direction to CCW
-
-		output *= (float)speed;
-
-	    if(output < 54.0)
-	    {
-	    	accumError -= integral;
-	    	output = 54.0;
-
-	    }
-	    
-	    cli();
-	      	this->delay = (uint16_t)((output*INTPIDDELAYCONSTANT) - 0.5);
-	    	if(!running)
-	    	{
-	    		this->state = CRUISE;
-	    	}
-	    sei();
-
-		this->startTimer();	
-		PORTD &= ~(1 << 4);
-	}
-	
-	else
-	{
-		if(error >= -this->hysteresis && error <= this->hysteresis)	//If error is less than 1 step
-		{
-			cli();
-			if(this->hold || this->state!=STOP)
-			{
-				PORTD &= ~(1 << 4);
-			}
-			else 
-			{
-				PORTD |= (1 << 4);
-			}
-
-			if(this->direction)
-			{
-				PORTB |= (1 << 2);		//change direction to CCW
-			}
-			else
-			{
-				PORTB &= ~(1 << 2);		//change direction to CW
-			}
-			if(!running)
-	    	{
-	    		this->state = STOP;
-	    	}
-			sei();
-			this->control = 0;			//Set control variable to 0, in order to make sure int0 routine generates step pulses
-			accumError = 0.0;				//Clear accumerror
-			
-			if(!this->state)
-			{
-				this->stopTimer();			//Stop timer 2
-			}
-		}
-	}
+	oldError = error;		//Save current error for next sample, for use in differential part
 }
 
 bool uStepperSLite::detectStall(float diff, bool running)

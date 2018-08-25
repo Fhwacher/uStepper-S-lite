@@ -308,6 +308,8 @@ extern "C" void TIMER2_COMPA_vect(void) __attribute__ ((signal,naked,used));
  */
 extern "C" void TIMER1_COMPA_vect(void) __attribute__ ((signal,used));
 
+extern "C" void TIMER4_COMPA_vect(void) __attribute__ ((signal,used));
+
 class float2
 {
 	public:
@@ -668,8 +670,14 @@ private:
 
 	volatile bool invertDir;
 
+	volatile float angleSetPoint;
+
+	volatile float targetVelocity;
+	volatile float currentVelocity;
+
 	friend void TIMER2_COMPA_vect(void) __attribute__ ((signal,naked,used));
 	friend void TIMER1_COMPA_vect(void) __attribute__ ((signal,used));
+	friend void TIMER4_COMPA_vect(void) __attribute__ ((signal,used));
 	friend void interrupt1(void);
 	friend void uStepperEncoder::setHome(void);
 
