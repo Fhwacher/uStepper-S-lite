@@ -1703,6 +1703,8 @@ void uStepperSLite::pid(void)
 	static uint32_t oldMicros = 0;
 	static uint8_t stallCounter = 0;
 	static bool running = 0;
+	static float torqueSpeedAdjust = 1.0;
+	static float change = 0.0;
 
 	if(I2C.getStatus() != I2CFREE)
 	{
@@ -1740,7 +1742,7 @@ void uStepperSLite::pid(void)
 	this->encoder.angleMoved = (int32_t)curAngle + (4096*(int32_t)this->encoder.revolutions);
 	this->encoder.oldAngle = curAngle;
 
-	error = (((float)this->encoder.angleMoved * this->stepConversion) - error); 
+	error = (((float)this->encoder.getAngleMoved() * this->stepConversion) - error); 
 	/*
 	if(!this->control)
 	{
@@ -1756,24 +1758,62 @@ void uStepperSLite::pid(void)
 
 	detectStall((float)deltaAngle, running);
 */
+	oldError = error - oldError;
+	change *= 0.8;
+	change += oldError * 0.2;
 
+	Serial.println(change);
 	integral = error*this->iTerm;	//Multiply current error by integral term
 	accumError += integral;				//And accumulate, to get integral action	
 	output = this->pTerm*error;
 	output += this->dTerm*oldError;
 	output += accumError;
-	if(output > 100.0)
+	if(output > 500.0)
 	{
-		output = 100.0;
+		output = 500.0;
 		accumError -= integral;
 	}
-	else if(output < -100.0)
+	else if(output < -500.0)
 	{
-		output = -100.0;
+		output = -500.0;
 		accumError -= integral;
 	}
 
-	this->targetVelocity = output;
+if(error < 0.0)
+{
+	if(change < 0.1)
+	{
+		torqueSpeedAdjust -= 0.1;
+	}
+	else
+	{
+		torqueSpeedAdjust += 0.1;
+	}
+}
+
+if(error >= 0.0)
+{
+	if(oldError > -0.1)
+	{
+		torqueSpeedAdjust -= 0.1;
+	}
+	else
+	{
+		torqueSpeedAdjust += 0.1;
+	}
+}
+
+
+	if(torqueSpeedAdjust > 1.0)
+	{
+		torqueSpeedAdjust = 1.0;
+	}
+	else if(torqueSpeedAdjust < 0.1)
+	{
+		torqueSpeedAdjust = 0.1;
+	}
+
+	this->targetVelocity = output * torqueSpeedAdjust;
 
 	oldError = error;		//Save current error for next sample, for use in differential part
 }
