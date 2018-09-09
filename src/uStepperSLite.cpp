@@ -1692,7 +1692,7 @@ void uStepperSLite::pid(void)
 {
 	static float oldError = 0.0;
 	float integral;
-	float output = 1.0;
+	static float output = 1.0;
 	static float accumError = 0.0;
 	float limit;
 	uint8_t data[2];
@@ -1759,62 +1759,57 @@ void uStepperSLite::pid(void)
 	detectStall((float)deltaAngle, running);
 */
 	oldError = error - oldError;
-	change *= 0.8;
-	change += oldError * 0.2;
+	
+	
+	if(abs(oldError) < (output * 0.006))
+	{
+		if(output > 100.0)
+		{
+			if(torqueSpeedAdjust >= 0.3)
+			{
+				torqueSpeedAdjust -= 0.3;	
+			}
+			else
+			{
+				torqueSpeedAdjust = 0.0;
+			}
+		}
+	}
+	else
+	{
+		if(torqueSpeedAdjust <= 0.9)
+		{
+			torqueSpeedAdjust += 0.1;	
+		}
+		else
+		{
+			torqueSpeedAdjust = 1.0;
+		}
+	}
 
-	Serial.println(change);
+	
+	//Serial.println(change);
 	integral = error*this->iTerm;	//Multiply current error by integral term
 	accumError += integral;				//And accumulate, to get integral action	
 	output = this->pTerm*error;
 	output += this->dTerm*oldError;
 	output += accumError;
-	if(output > 500.0)
+	if(output > this->velocity)
 	{
-		output = 500.0;
+		output = this->velocity;
 		accumError -= integral;
 	}
-	else if(output < -500.0)
+	else if(output < -this->velocity)
 	{
-		output = -500.0;
+		output = -this->velocity;
 		accumError -= integral;
 	}
 
-if(error < 0.0)
-{
-	if(change < 0.1)
-	{
-		torqueSpeedAdjust -= 0.1;
-	}
-	else
-	{
-		torqueSpeedAdjust += 0.1;
-	}
-}
-
-if(error >= 0.0)
-{
-	if(oldError > -0.1)
-	{
-		torqueSpeedAdjust -= 0.1;
-	}
-	else
-	{
-		torqueSpeedAdjust += 0.1;
-	}
-}
-
-
-	if(torqueSpeedAdjust > 1.0)
-	{
-		torqueSpeedAdjust = 1.0;
-	}
-	else if(torqueSpeedAdjust < 0.1)
-	{
-		torqueSpeedAdjust = 0.1;
-	}
-
-	this->targetVelocity = output * torqueSpeedAdjust;
-
+	output *= 0.01875;		//steps/s to rpm
+	
+	output *= torqueSpeedAdjust;
+	this->targetVelocity = output;
+	Serial.println(output);
 	oldError = error;		//Save current error for next sample, for use in differential part
 }
 
