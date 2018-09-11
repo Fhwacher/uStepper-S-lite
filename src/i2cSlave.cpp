@@ -9,6 +9,7 @@ extern "C" {
 	{
 		static uint8_t address = 0;
 		static uint8_t bytesRecieved = 0;
+		cli();
 	  	switch(TW_STATUS)
 	  	{
 	    case TW_SR_DATA_ACK:
@@ -52,6 +53,7 @@ extern "C" {
 	      TWCR0 = (1<<TWIE0) | (1<<TWINT0) | (1<<TWEA0) | (1<<TWEN0);
 	      break;
 	  	}
+	  	sei();
 	}
 }
 

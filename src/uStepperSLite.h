@@ -675,6 +675,10 @@ private:
 	volatile float targetVelocity;
 	volatile float currentVelocity;
 
+	volatile float pidState;
+
+	volatile uint32_t millis;
+
 	friend void TIMER2_COMPA_vect(void) __attribute__ ((signal,naked,used));
 	friend void TIMER1_COMPA_vect(void) __attribute__ ((signal,used));
 	friend void TIMER4_COMPA_vect(void) __attribute__ ((signal,used));
@@ -1061,6 +1065,8 @@ public:
 	bool isStalled(void);
 
 	bool detectStall(float diff, bool running);
+
+	uint32_t uStepperMillis(void);
 };
 
 /** Global definition of I2C object for use in arduino sketch */

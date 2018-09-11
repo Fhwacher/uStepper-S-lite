@@ -1238,8 +1238,8 @@ void uStepperSLite::setup(	uint8_t mode,
 	{
 		pointer->stepsSinceReset = ((float)this->encoder.angleMoved * this->stepConversion) + 0.5;
 	}
-	_delay_ms(1000);
-
+this->angleSetPoint = 0.0;
+		this->pidState = 0;
 	if(this->mode)
 	{
 		if(this->mode == DROPIN)
@@ -1268,7 +1268,7 @@ void uStepperSLite::setup(	uint8_t mode,
 		TCCR4A = 0;
 
 		TCCR4A |= (1 << WGM41);				//Switch timer 2 to Fast PWM mode, to enable adjustment of interrupt frequency, while being able to use PWM
-		ICR4 = 2000;
+		ICR4 = 6000;
 
 		TCCR4B |= (1 << CS41) | (1 << WGM42) | (1 << WGM43);				//Enable timer with prescaler 8 - interrupt base frequency ~ 2MHz
 		while(TCNT4);						//Wait for timer to overflow, to ensure correct timing.
@@ -1337,13 +1337,9 @@ bool uStepperSLite::getMotorState(void)
 {
 	if(this->mode == PID)
 	{
-		if(this->control)
+		if(this->pidState)
 		{
 			return 1;
-		}
-		else if(this->state != STOP)
-		{
-			return 1;		//Motor running
 		}
 		return 0;
 	}
@@ -1509,7 +1505,10 @@ void uStepperSLite::moveToAngle(float angle, bool holdMode)
 	float diff;
 	uint32_t steps;
 
+	cli();
 		this->angleSetPoint = angle;
+		this->pidState = 1;
+		sei();
 		return;
 
 		diff = angle - this->encoder.getAngleMoved();
@@ -1699,12 +1698,15 @@ void uStepperSLite::pid(void)
 	uint16_t curAngle;
 	int16_t deltaAngle;
 	float error;
+	static float filteredError = 0.0;
 	static uint32_t speed = 10000;
 	static uint32_t oldMicros = 0;
 	static uint8_t stallCounter = 0;
 	static bool running = 0;
 	static float torqueSpeedAdjust = 1.0;
 	static float change = 0.0;
+
+	this->millis += 2;
 
 	if(I2C.getStatus() != I2CFREE)
 	{
@@ -1742,7 +1744,7 @@ void uStepperSLite::pid(void)
 	this->encoder.angleMoved = (int32_t)curAngle + (4096*(int32_t)this->encoder.revolutions);
 	this->encoder.oldAngle = curAngle;
 
-	error = (((float)this->encoder.getAngleMoved() * this->stepConversion) - error); 
+	error = ((float)this->encoder.getAngleMoved() - error); 
 	/*
 	if(!this->control)
 	{
@@ -1787,8 +1789,18 @@ void uStepperSLite::pid(void)
 		}
 	}
 
-	
-	//Serial.println(change);
+	filteredError *= 0.9;
+	filteredError += error*0.1;
+Serial.println(filteredError);
+	if(filteredError > 0.25 || filteredError < -0.25)
+	{
+		this->pidState = 1;
+	}
+	else
+	{
+		this->pidState = 0;
+	}
+	//Serial.println(error);
 	integral = error*this->iTerm;	//Multiply current error by integral term
 	accumError += integral;				//And accumulate, to get integral action	
 	output = this->pTerm*error;
@@ -1809,7 +1821,7 @@ void uStepperSLite::pid(void)
 	
 	output *= torqueSpeedAdjust;
 	this->targetVelocity = output;
-	Serial.println(output);
+	//Serial.println(output);
 	oldError = error;		//Save current error for next sample, for use in differential part
 }
 
@@ -1841,8 +1853,8 @@ bool uStepperSLite::detectStall(float diff, bool running)
 
 			if(temp < 0.3 && temp > -0.3)
 			{
-				Serial.println(temp);
-				Serial.println(treshold);
+				//Serial.println(temp);
+				//Serial.println(treshold);
 				this->stall = 1;
 			}
 			else
@@ -1864,4 +1876,14 @@ bool uStepperSLite::detectStall(float diff, bool running)
 bool uStepperSLite::isStalled(void)
 {
 	return this->stall;
+}
+
+uint32_t uStepperSLite::uStepperMillis(void)
+{
+	uint32_t temp;
+
+	cli();
+	temp = this->millis;
+	sei();
+	return temp;
 }

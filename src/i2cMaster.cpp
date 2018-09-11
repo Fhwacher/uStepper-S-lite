@@ -9,7 +9,7 @@ bool i2cMaster::cmd(uint8_t cmd)
 	while (!(_SFR_MEM8(this->twcr) & (1 << TWINT1)))
 	{
 		i++;
-		if(i == 300)
+		if(i == 10000)
 		{
 			Serial.println("abe");
 			return false;
@@ -186,7 +186,7 @@ uint8_t i2cMaster::getStatus(void)
 void i2cMaster::begin(void)
 {
 	// set bit rate register to 12 to obtain 400kHz scl frequency (in combination with no prescaling!)
-	_SFR_MEM8(this->twbr) = 1;
+	_SFR_MEM8(this->twbr) = 12;
 	// no prescaler
 	_SFR_MEM8(this->twsr) &= 0xFC;
 }
